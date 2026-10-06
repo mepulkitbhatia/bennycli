@@ -1,0 +1,35 @@
+{
+  "name": "bennycli",
+  "version": "0.0.1",
+  "description": "Benny: a terminal coding agent with a hand-written agent loop",
+  "license": "MIT",
+  "author": "Pulkit Bhatia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mepulkitbhatia/bennycli.git"
+  },
+  "type": "module",
+  "bin": {
+    "benny": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "spike": "node --env-file=.env scripts/spike.ts"
+  },
+  "dependencies": {
+    "openai": "^7.28.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
