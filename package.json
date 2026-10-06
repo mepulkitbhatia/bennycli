@@ -22,6 +22,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc",
     "test": "vitest run",
+    "dev": "node --env-file=.env src/cli.ts",
     "spike": "node --env-file=.env scripts/spike.ts"
   },
   "dependencies": {
