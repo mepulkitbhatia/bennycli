@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { styleText } from "node:util";
 import { runTurn } from "./agent.ts";
 import { createChat, type Message } from "./llm.ts";
+import { tools } from "./tools/index.ts";
 
 // package.json sits one level above both src/ (dev) and dist/ (published).
 const { version } = JSON.parse(
@@ -40,6 +41,20 @@ async function main() {
   rl.on("close", () => (open = false));
   const prompt = () => open && rl.prompt();
 
+  // Streamed text and tool lines share the screen; keep each tool line on its own line.
+  let midLine = false;
+  const events = {
+    onText: (text: string) => {
+      process.stdout.write(text);
+      midLine = !text.endsWith("\n");
+    },
+    onToolCall: (name: string, args: string) => {
+      const shown = args.length > 100 ? `${args.slice(0, 100)}…` : args;
+      console.log(`${midLine ? "\n" : ""}${styleText("cyan", "●")} ${name} ${styleText("dim", shown)}`);
+      midLine = false;
+    },
+  };
+
   console.log(styleText("dim", `benny ${version} · ${model} · Ctrl+C stops a reply, Ctrl+D exits`));
   prompt();
   for await (const line of rl) {
@@ -48,9 +63,12 @@ async function main() {
       messages.push({ role: "user", content: text });
       replying = new AbortController();
       try {
-        const { usage, aborted } = await runTurn(messages, chat, (piece) => process.stdout.write(piece), replying.signal);
-        console.log(aborted ? styleText("dim", "\n(stopped)") : "");
-        if (usage) console.log(styleText("dim", `${usage.total_tokens} tokens`));
+        const result = await runTurn(messages, chat, events, { tools, cwd: process.cwd(), signal: replying.signal });
+        if (midLine) console.log();
+        midLine = false;
+        if (result.aborted) console.log(styleText("dim", "(stopped)"));
+        if (result.hitStepLimit) console.log(styleText("yellow", "Stopped after 25 tool steps. Say \"continue\" to carry on."));
+        console.log(styleText("dim", `${result.tokens} tokens · ${result.requests} request${result.requests === 1 ? "" : "s"}`));
       } catch (err) {
         messages.pop(); // the request failed, so forget the message and let the user try again
         console.error(`\nError: ${err instanceof Error ? err.message : String(err)}`);
