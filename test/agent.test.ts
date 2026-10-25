@@ -156,3 +156,16 @@ test("a failed request is reported and adds nothing to the conversation", async 
   await expect(run(messages, chat)).rejects.toThrow("429");
   expect(messages).toHaveLength(1);
 });
+
+test("a request that fails mid-turn rolls the conversation back to before the turn", async () => {
+  let requests = 0;
+  const chat: Chat = async () => {
+    if (++requests === 1) return toolCall("echo", { text: "x" });
+    throw new Error("400 Parsing failed");
+  };
+  const messages: Message[] = [{ role: "user", content: "earlier" }, { role: "assistant", content: "ok" }, { role: "user", content: "go" }];
+
+  await expect(run(messages, chat)).rejects.toThrow("400");
+  expect(messages).toHaveLength(3); // no dangling tool request left behind
+  expect(messages.at(-1)).toEqual({ role: "user", content: "go" });
+});

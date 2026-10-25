@@ -25,6 +25,18 @@ export type TurnResult = {
 // the conversation and ask again. The model keeps no memory between requests,
 // so `messages` is the memory, and every tool result it sees is in there.
 export async function runTurn(messages: Message[], chat: Chat, events: TurnEvents, opts: TurnOptions): Promise<TurnResult> {
+  const lengthBefore = messages.length;
+  try {
+    return await loop(messages, chat, events, opts);
+  } catch (err) {
+    // A request failed part-way through. Drop the half-finished turn, or the next
+    // request would carry a tool request with no result and fail as well.
+    messages.length = lengthBefore;
+    throw err;
+  }
+}
+
+async function loop(messages: Message[], chat: Chat, events: TurnEvents, opts: TurnOptions): Promise<TurnResult> {
   const { tools, cwd, signal, maxSteps = 25 } = opts;
   const toolDefs = toOpenAITools(tools);
   const result: TurnResult = { requests: 0, tokens: 0, aborted: false, hitStepLimit: false };

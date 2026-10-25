@@ -5,6 +5,7 @@ import { styleText } from "node:util";
 import { runTurn } from "./agent.ts";
 import { createChat, type Message } from "./llm.ts";
 import { tools } from "./tools/index.ts";
+import { ripgrepAvailable } from "./tools/search.ts";
 
 // package.json sits one level above both src/ (dev) and dist/ (published).
 const { version } = JSON.parse(
@@ -28,6 +29,11 @@ async function main() {
   }
 
   const chat = createChat({ apiKey, baseURL, model });
+  let available = tools;
+  if (!(await ripgrepAvailable())) {
+    console.error(styleText("yellow", "ripgrep (rg) is not installed, so the search tool is off. Install it with: brew install ripgrep"));
+    available = tools.filter((tool) => tool.name !== "search");
+  }
   const messages: Message[] = [];
   let replying: AbortController | undefined;
 
@@ -63,7 +69,7 @@ async function main() {
       messages.push({ role: "user", content: text });
       replying = new AbortController();
       try {
-        const result = await runTurn(messages, chat, events, { tools, cwd: process.cwd(), signal: replying.signal });
+        const result = await runTurn(messages, chat, events, { tools: available, cwd: process.cwd(), signal: replying.signal });
         if (midLine) console.log();
         midLine = false;
         if (result.aborted) console.log(styleText("dim", "(stopped)"));

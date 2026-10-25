@@ -1,11 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
 import { z } from "zod";
-import { defineTool, resolveInside } from "./tool.ts";
+import { defineTool, OUTPUT_MAX_CHARS, resolveInside } from "./tool.ts";
 
-// Everything a tool returns is sent to the model again on every later request,
-// so the output is capped. 6,000 characters is roughly 1,500 tokens.
 const DEFAULT_LIMIT = 150;
-const MAX_CHARS = 6000;
 const MAX_LINE_CHARS = 400;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -23,7 +20,7 @@ export const readFileTool = defineTool({
   async run({ path, offset = 1, limit = DEFAULT_LIMIT }, cwd) {
     const full = await resolveInside(cwd, path);
     const info = await stat(full).catch(() => undefined);
-    if (!info) throw new Error(`File not found: ${path}`);
+    if (!info) throw new Error(`File not found: ${path}. Use list_dir or search to find the right path.`);
     if (info.isDirectory()) throw new Error(`${path} is a folder, not a file.`);
     // ponytail: reads the whole file to count lines; read line by line if bigger files matter.
     if (info.size > MAX_FILE_BYTES) throw new Error(`${path} is too large to read (${Math.round(info.size / 1024 / 1024)} MB).`);
@@ -43,7 +40,7 @@ export const readFileTool = defineTool({
       let line = lines[i]!;
       if (line.length > MAX_LINE_CHARS) line = `${line.slice(0, MAX_LINE_CHARS)}… [line cut]`;
       const numbered = `${i + 1}\t${line}`;
-      if (out.length > 0 && chars + numbered.length > MAX_CHARS) break;
+      if (out.length > 0 && chars + numbered.length > OUTPUT_MAX_CHARS) break;
       out.push(numbered);
       chars += numbered.length + 1;
     }

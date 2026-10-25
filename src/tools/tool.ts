@@ -35,7 +35,8 @@ export function toOpenAITools(tools: Tool[]): OpenAI.Chat.ChatCompletionTool[] {
 // by the model, so either can be wrong. Every failure comes back as text the
 // model can read and correct, never as a crash.
 export async function runTool(tools: Tool[], name: string, rawArgs: string, cwd: string): Promise<string> {
-  const tool = tools.find((t) => t.name === name);
+  // gpt-oss sometimes prefixes the name with a namespace it invented ("repo_browser.list_dir").
+  const tool = tools.find((t) => t.name === name || t.name === name.replace(/^\w+\./, ""));
   if (!tool) {
     return `Error: there is no tool named "${name}". Available tools: ${tools.map((t) => t.name).join(", ")}.`;
   }
@@ -84,4 +85,21 @@ export async function resolveInside(cwd: string, path: string): Promise<string> 
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
   return full;
+}
+
+// Everything a tool returns is sent to the model again on every later request,
+// so output is capped. 6,000 characters is roughly 1,500 tokens.
+export const OUTPUT_MAX_CHARS = 6000;
+
+// Keeps the first lines that fit and ends with a note telling the model what was left out.
+export function capLines(lines: string[], note: (shown: number, total: number) => string, maxLines = 50): string {
+  const out: string[] = [];
+  let chars = 0;
+  for (const line of lines) {
+    if (out.length >= maxLines || (out.length > 0 && chars + line.length > OUTPUT_MAX_CHARS)) break;
+    out.push(line);
+    chars += line.length + 1;
+  }
+  if (out.length < lines.length) out.push(note(out.length, lines.length));
+  return out.join("\n");
 }
