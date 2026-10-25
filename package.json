@@ -26,6 +26,7 @@
     "spike": "node --env-file=.env scripts/spike.ts"
   },
   "dependencies": {
+    "diff": "^9.0.0",
     "openai": "^7.28.0",
     "zod": "^4.6.5"
   },

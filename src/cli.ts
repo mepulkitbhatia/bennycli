@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import { createInterface } from "node:readline/promises";
 import { styleText } from "node:util";
 import { runTurn } from "./agent.ts";
 import { createChat, type Message } from "./llm.ts";
+import { createPermissions } from "./permissions.ts";
 import { tools } from "./tools/index.ts";
 import { ripgrepAvailable } from "./tools/search.ts";
 
@@ -38,6 +39,8 @@ async function main() {
   let replying: AbortController | undefined;
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " });
+  // The question is cancelled by the same Ctrl+C that stops the turn, and a cancelled question is a "no".
+  const permission = createPermissions((question) => rl.question(question, { signal: replying?.signal }));
   rl.on("SIGINT", () => {
     if (replying) replying.abort(); // Ctrl+C during a reply stops the reply, not Benny
     else rl.close(); // Ctrl+C at the prompt leaves
@@ -69,7 +72,7 @@ async function main() {
       messages.push({ role: "user", content: text });
       replying = new AbortController();
       try {
-        const result = await runTurn(messages, chat, events, { tools: available, cwd: process.cwd(), signal: replying.signal });
+        const result = await runTurn(messages, chat, events, { tools: available, cwd: process.cwd(), permission, signal: replying.signal });
         if (midLine) console.log();
         midLine = false;
         if (result.aborted) console.log(styleText("dim", "(stopped)"));

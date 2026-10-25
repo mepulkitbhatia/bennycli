@@ -17,7 +17,7 @@ export const readFileTool = defineTool({
     offset: z.coerce.number().int().min(1).optional().describe("Line number to start from. The first line is 1"),
     limit: z.coerce.number().int().min(1).optional().describe(`Maximum number of lines to return. Default ${DEFAULT_LIMIT}`),
   }),
-  async run({ path, offset = 1, limit = DEFAULT_LIMIT }, cwd) {
+  async run({ path, offset = 1, limit = DEFAULT_LIMIT }, { cwd }) {
     const full = await resolveInside(cwd, path);
     const info = await stat(full).catch(() => undefined);
     if (!info) throw new Error(`File not found: ${path}. Use list_dir or search to find the right path.`);

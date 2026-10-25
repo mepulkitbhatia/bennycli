@@ -1,5 +1,5 @@
 import type { Chat, Message, Reply } from "./llm.ts";
-import { runTool, toOpenAITools, type Tool } from "./tools/tool.ts";
+import { runTool, toOpenAITools, type Permission, type Tool } from "./tools/tool.ts";
 
 export type TurnEvents = {
   onText: (text: string) => void;
@@ -9,6 +9,7 @@ export type TurnEvents = {
 export type TurnOptions = {
   tools: Tool[];
   cwd: string;
+  permission: Permission;
   signal?: AbortSignal;
   maxSteps?: number;
 };
@@ -37,7 +38,7 @@ export async function runTurn(messages: Message[], chat: Chat, events: TurnEvent
 }
 
 async function loop(messages: Message[], chat: Chat, events: TurnEvents, opts: TurnOptions): Promise<TurnResult> {
-  const { tools, cwd, signal, maxSteps = 25 } = opts;
+  const { tools, cwd, permission, signal, maxSteps = 25 } = opts;
   const toolDefs = toOpenAITools(tools);
   const result: TurnResult = { requests: 0, tokens: 0, aborted: false, hitStepLimit: false };
 
@@ -71,7 +72,7 @@ async function loop(messages: Message[], chat: Chat, events: TurnEvents, opts: T
       events.onToolCall(call.name, call.arguments);
       const content = signal?.aborted
         ? "Cancelled: the user stopped this turn before the tool ran."
-        : await runTool(tools, call.name, call.arguments, cwd);
+        : await runTool(tools, call.name, call.arguments, { cwd, permission });
       messages.push({ role: "tool", tool_call_id: call.id, content });
     }
     if (signal?.aborted) {

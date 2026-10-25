@@ -22,7 +22,7 @@ export const searchTool = defineTool({
     path: z.string().optional().describe("Folder or file to search in, relative to the project. Default: the whole project"),
     glob: z.string().optional().describe('Only search files whose path matches this pattern, e.g. "*.ts" or "src/**"'),
   }),
-  async run({ pattern, path = ".", glob }, cwd) {
+  async run({ pattern, path = ".", glob }, { cwd }) {
     const target = relative(cwd, await resolveInside(cwd, path)) || ".";
     // ripgrep skips .gitignore'd and binary files on its own. Hidden files are included
     // (.github, .eslintrc), but the .git folder is not.

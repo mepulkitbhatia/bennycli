@@ -8,7 +8,7 @@ export const listDirTool = defineTool({
   schema: z.object({
     path: z.string().optional().describe("Folder path, relative to the project. Default: the project root"),
   }),
-  async run({ path = "." }, cwd) {
+  async run({ path = "." }, { cwd }) {
     const full = await resolveInside(cwd, path);
     const entries = await readdir(full, { withFileTypes: true }).catch((err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") throw new Error(`Folder not found: ${path}`);

@@ -32,7 +32,7 @@ function scripted(replies: Reply[]) {
 
 const quiet: TurnEvents = { onText: () => {}, onToolCall: () => {} };
 const run = (messages: Message[], chat: Chat, extra: Partial<Parameters<typeof runTurn>[3]> = {}, events = quiet) =>
-  runTurn(messages, chat, events, { tools: [echo], cwd: process.cwd(), ...extra });
+  runTurn(messages, chat, events, { tools: [echo], cwd: process.cwd(), permission: async () => true, ...extra });
 
 test("a text answer ends the turn after one request", async () => {
   const { chat, received } = scripted([text("Hello")]);

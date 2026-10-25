@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -9,7 +9,9 @@ let base: string; // holds the project folder and one file outside it
 let cwd: string;
 
 const numbered = (count: number, text = "line") => Array.from({ length: count }, (_, i) => `${text} ${i + 1}`).join("\n") + "\n";
-const read = (args: object) => runTool(tools, "read_file", JSON.stringify(args), cwd);
+const allow = async () => true;
+const ctx = () => ({ cwd, permission: allow });
+const read = (args: object) => runTool(tools, "read_file", JSON.stringify(args), ctx());
 
 beforeAll(async () => {
   base = await mkdtemp(join(tmpdir(), "benny-tools-"));
@@ -39,8 +41,16 @@ beforeAll(async () => {
   await Promise.all(Array.from({ length: 250 }, (_, i) => writeFile(join(cwd, "crowd", `f${String(i).padStart(3, "0")}.txt`), "")));
 });
 
-const list = (args: object) => runTool(tools, "list_dir", JSON.stringify(args), cwd);
-const search = (args: object) => runTool(tools, "search", JSON.stringify(args), cwd);
+const list = (args: object) => runTool(tools, "list_dir", JSON.stringify(args), ctx());
+const search = (args: object) => runTool(tools, "search", JSON.stringify(args), ctx());
+// For the writing tools, the test plays the user: it records the preview and answers.
+const asUser = (answer: boolean) => {
+  const previews: string[] = [];
+  const permission = async (_tool: string, preview: string) => (previews.push(preview), answer);
+  return { previews, permission };
+};
+const edit = (args: object, user = asUser(true)) => runTool(tools, "edit_file", JSON.stringify(args), { cwd, permission: user.permission });
+const write = (args: object, user = asUser(true)) => runTool(tools, "write_file", JSON.stringify(args), { cwd, permission: user.permission });
 
 afterAll(() => rm(base, { recursive: true, force: true }));
 
@@ -160,23 +170,104 @@ describe("search", () => {
   });
 });
 
+describe("edit_file", () => {
+  test("replaces the one matching text after the user sees the diff and agrees", async () => {
+    await writeFile(join(cwd, "sum.js"), "export function sum(a, b) {\n  return a - b;\n}\n");
+    const user = asUser(true);
+
+    const out = await edit({ path: "sum.js", old_text: "return a - b;", new_text: "return a + b;" }, user);
+
+    expect(out).toBe("Edited sum.js: lines 2-2 now contain the new text.");
+    expect(await readFile(join(cwd, "sum.js"), "utf8")).toBe("export function sum(a, b) {\n  return a + b;\n}\n");
+    expect(user.previews[0]).toBe("@@ -1,3 +1,3 @@\n export function sum(a, b) {\n-  return a - b;\n+  return a + b;\n }");
+  });
+
+  test("a refusal leaves the file untouched and tells the model", async () => {
+    await writeFile(join(cwd, "keep.js"), "const keep = 1;\n");
+
+    const out = await edit({ path: "keep.js", old_text: "1", new_text: "2" }, asUser(false));
+
+    expect(out).toContain("The user declined this change");
+    expect(await readFile(join(cwd, "keep.js"), "utf8")).toBe("const keep = 1;\n");
+  });
+
+  test("text that is missing, ambiguous or unchanged is refused with a reason, without asking the user", async () => {
+    await writeFile(join(cwd, "two.js"), "let a = 1;\nlet b = 1;\n");
+    const user = asUser(true);
+
+    expect(await edit({ path: "two.js", old_text: "let c = 1;", new_text: "x" }, user)).toContain("was not found in two.js");
+    expect(await edit({ path: "two.js", old_text: "= 1;", new_text: "= 2;" }, user)).toContain("appears 2 times in two.js");
+    expect(await edit({ path: "two.js", old_text: "let a", new_text: "let a" }, user)).toContain("nothing to change");
+    expect(await edit({ path: "missing.js", old_text: "a", new_text: "b" }, user)).toBe("Error: File not found: missing.js. Use write_file to create a new file.");
+    expect(user.previews).toEqual([]);
+  });
+
+  test("a multi-line replacement reports the new line range", async () => {
+    await writeFile(join(cwd, "multi.js"), "a\nb\nc\nd\n");
+    expect(await edit({ path: "multi.js", old_text: "b\nc", new_text: "x\ny\nz" })).toBe("Edited multi.js: lines 2-4 now contain the new text.");
+    expect(await readFile(join(cwd, "multi.js"), "utf8")).toBe("a\nx\ny\nz\nd\n");
+  });
+});
+
+describe("write_file", () => {
+  test("creates a file and its folders after showing the content", async () => {
+    const user = asUser(true);
+
+    const out = await write({ path: "deep/er/new.txt", content: "hello\nworld\n" }, user);
+
+    expect(out).toBe("Created deep/er/new.txt (2 lines).");
+    expect(await readFile(join(cwd, "deep/er/new.txt"), "utf8")).toBe("hello\nworld\n");
+    expect(user.previews[0]).toBe("New file deep/er/new.txt (2 lines)\n@@ -1,0 +1,2 @@\n+hello\n+world");
+  });
+
+  test("overwriting shows a diff against the old content", async () => {
+    await writeFile(join(cwd, "old.txt"), "one\ntwo\n");
+    const user = asUser(true);
+
+    expect(await write({ path: "old.txt", content: "one\n2\n" }, user)).toBe("Replaced old.txt (2 lines).");
+    expect(user.previews[0]).toContain("-two\n+2");
+  });
+
+  test("a refusal creates nothing", async () => {
+    expect(await write({ path: "never.txt", content: "x" }, asUser(false))).toContain("The user declined this change");
+    await expect(readFile(join(cwd, "never.txt"))).rejects.toThrow();
+  });
+
+  test("identical content is a no-op without asking", async () => {
+    await writeFile(join(cwd, "same.txt"), "same\n");
+    const user = asUser(true);
+    expect(await write({ path: "same.txt", content: "same\n" }, user)).toContain("nothing to do");
+    expect(user.previews).toEqual([]);
+  });
+
+  test("writing outside the project is refused, including a new file under a symlinked folder", async () => {
+    await symlink(base, join(cwd, "link-out"));
+    const user = asUser(true);
+    expect(await write({ path: "../escaped.txt", content: "x" }, user)).toContain("outside the project folder");
+    expect(await write({ path: "link-out/escaped.txt", content: "x" }, user)).toContain("outside the project folder");
+    expect(await write({ path: "link-out/brand/new/escaped.txt", content: "x" }, user)).toContain("outside the project folder");
+    await expect(readFile(join(base, "escaped.txt"))).rejects.toThrow();
+    expect(user.previews).toEqual([]);
+  });
+});
+
 describe("runTool handles whatever the model sends", () => {
   test("an unknown tool name lists the tools that exist", async () => {
-    expect(await runTool(tools, "open_file", "{}", cwd)).toBe(
-      'Error: there is no tool named "open_file". Available tools: read_file, list_dir, search.',
+    expect(await runTool(tools, "open_file", "{}", ctx())).toBe(
+      'Error: there is no tool named "open_file". Available tools: read_file, list_dir, search, edit_file, write_file.',
     );
   });
 
   test("a made-up namespace in front of the tool name is forgiven", async () => {
-    expect(await runTool(tools, "repo_browser.read_file", '{"path":"small.txt"}', cwd)).toBe("1\talpha\n2\tbeta\n3\tgamma");
+    expect(await runTool(tools, "repo_browser.read_file", '{"path":"small.txt"}', ctx())).toBe("1\talpha\n2\tbeta\n3\tgamma");
   });
 
   test("broken JSON is reported", async () => {
-    expect(await runTool(tools, "read_file", '{"path": "small.txt"', cwd)).toContain("not valid JSON");
+    expect(await runTool(tools, "read_file", '{"path": "small.txt"', ctx())).toContain("not valid JSON");
   });
 
   test("a missing or wrongly typed argument names the field", async () => {
-    const missing = await runTool(tools, "read_file", "{}", cwd);
+    const missing = await runTool(tools, "read_file", "{}", ctx());
     expect(missing).toContain("invalid arguments for read_file");
     expect(missing).toContain("path");
 
