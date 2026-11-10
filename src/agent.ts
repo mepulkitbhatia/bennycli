@@ -1,3 +1,4 @@
+import { compact } from "./compact.ts";
 import { tokenCounter, type TokenCounter } from "./context.ts";
 import { MalformedToolCallError, type Chat, type Message, type Reply } from "./llm.ts";
 import { runTool, toOpenAITools, type Permission, type Tool } from "./tools/tool.ts";
@@ -20,6 +21,9 @@ export type TurnOptions = {
   // whole session so it can reuse Groq's counts from earlier turns.
   contextLimit?: number;
   counter?: TokenCounter;
+  // Writes the summary when the conversation must be compacted. Without it, a turn
+  // that outgrows contextLimit just stops.
+  summarize?: Chat;
 };
 
 export type TurnResult = {
@@ -27,7 +31,7 @@ export type TurnResult = {
   tokens: number;
   aborted: boolean;
   hitStepLimit: boolean;
-  contextFull: boolean; // stopped because the next request would be over contextLimit
+  contextFull: boolean; // stopped because the next request would be over contextLimit, even after compacting
   contextTokens: number; // how big the conversation is now, as the next request would be
 };
 
@@ -36,7 +40,8 @@ export type TurnResult = {
 // the conversation and ask again. The model keeps no memory between requests,
 // so `messages` is the memory, and every tool result it sees is in there.
 export async function runTurn(messages: Message[], chat: Chat, events: TurnEvents, opts: TurnOptions): Promise<TurnResult> {
-  const lengthBefore = messages.length;
+  // Compaction can rewrite earlier messages, so a failed turn restores a full copy, not just a length.
+  const before = [...messages];
   const counter = opts.counter ?? tokenCounter();
   try {
     const result = await loop(messages, chat, events, { ...opts, counter });
@@ -45,7 +50,8 @@ export async function runTurn(messages: Message[], chat: Chat, events: TurnEvent
   } catch (err) {
     // A request failed part-way through. Drop the half-finished turn, or the next
     // request would carry a tool request with no result and fail as well.
-    messages.length = lengthBefore;
+    messages.splice(0, messages.length, ...before);
+    counter.forget();
     throw err;
   }
 }
@@ -56,7 +62,7 @@ async function loop(
   events: TurnEvents,
   opts: TurnOptions & { counter: TokenCounter },
 ): Promise<TurnResult> {
-  const { tools, cwd, permission, signal, maxSteps = 25, contextLimit = Infinity, counter } = opts;
+  const { tools, cwd, permission, signal, maxSteps = 25, contextLimit = Infinity, counter, summarize } = opts;
   const toolDefs = toOpenAITools(tools);
   const result: TurnResult = { requests: 0, tokens: 0, aborted: false, hitStepLimit: false, contextFull: false, contextTokens: 0 };
   let lastMalformed: MalformedToolCallError | undefined;
@@ -64,7 +70,25 @@ async function loop(
   // ponytail: a plain step cap. Add detection of the same call repeating if the evals show loops.
   for (let step = 0; step < maxSteps; step++) {
     // Groq rejects a request over the limit outright, and waiting does not help,
-    // so a request that will not fit is never sent. The conversation stays valid.
+    // so a request that will not fit is first compacted, and never sent if it still does not fit.
+    const size = counter.estimate(messages, toolDefs);
+    if (size > contextLimit && summarize) {
+      try {
+        // Keep about 30% of the limit as recent messages; the rest becomes the summary.
+        const summarised = await compact(messages, summarize, { keepTokens: Math.floor(contextLimit * 0.3), signal });
+        if (summarised > 0) {
+          counter.forget();
+          const after = counter.estimate(messages, toolDefs);
+          events.onNotice(`Summarised ${summarised} earlier messages to make room (about ${size.toLocaleString("en")} → ${after.toLocaleString("en")} tokens).`);
+        }
+      } catch (err) {
+        if (signal?.aborted) {
+          result.aborted = true;
+          return result;
+        }
+        events.onNotice(`Could not summarise the earlier conversation: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     if (counter.estimate(messages, toolDefs) > contextLimit) {
       result.contextFull = true;
       return result;

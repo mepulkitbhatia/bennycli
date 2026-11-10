@@ -77,5 +77,9 @@ export function tokenCounter() {
     record(sent: readonly unknown[], promptTokens: number) {
       known = { count: sent.length, last: sent.at(-1), tokens: promptTokens };
     },
+    // After the conversation is rewritten (compaction), estimate everything until Groq counts again.
+    forget() {
+      known = undefined;
+    },
   };
 }

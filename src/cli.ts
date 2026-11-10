@@ -35,6 +35,9 @@ async function main() {
   }
 
   const chat = createChat({ apiKey, baseURL, model });
+  // Summaries come from a smaller model. On Groq each model has its own per-minute
+  // allowance, so summarising does not use up the main model's.
+  const summarize = createChat({ apiKey, baseURL, model: process.env.BENNY_SUMMARY_MODEL ?? "openai/gpt-oss-20b" });
   let available = tools;
   if (!(await ripgrepAvailable())) {
     console.error(styleText("yellow", "ripgrep (rg) is not installed, so the search tool is off. Install it with: brew install ripgrep"));
@@ -86,13 +89,13 @@ async function main() {
       messages.push({ role: "user", content: text });
       replying = new AbortController();
       try {
-        const result = await runTurn(messages, chat, events, { tools: available, cwd, permission, signal: replying.signal, contextLimit, counter });
+        const result = await runTurn(messages, chat, events, { tools: available, cwd, permission, signal: replying.signal, contextLimit, counter, summarize });
         if (midLine) console.log();
         midLine = false;
         if (result.aborted) console.log(styleText("dim", "(stopped)"));
         if (result.hitStepLimit) console.log(styleText("yellow", "Stopped after 25 tool steps. Say \"continue\" to carry on."));
         if (result.contextFull) {
-          console.log(styleText("yellow", `The conversation is now too long to send (about ${result.contextTokens.toLocaleString("en")} tokens; the limit is ${contextLimit.toLocaleString("en")}). Start a new session: press Ctrl+D, then run benny again.`));
+          console.log(styleText("yellow", `The conversation is too long to send, even after summarising (about ${result.contextTokens.toLocaleString("en")} tokens; the limit is ${contextLimit.toLocaleString("en")}). Start a new session: press Ctrl+D, then run benny again.`));
         }
         const plural = result.requests === 1 ? "" : "s";
         console.log(styleText("dim", `${result.tokens.toLocaleString("en")} tokens · ${result.requests} request${plural} · context ${kilo(result.contextTokens)} of ${kilo(contextLimit)}`));

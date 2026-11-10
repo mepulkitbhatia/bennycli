@@ -252,3 +252,51 @@ describe("the context limit", () => {
     expect(result.contextTokens).toBe(10 + roughTokens([{ role: "assistant", content: "Hello" }]));
   });
 });
+
+describe("compaction inside a turn", () => {
+  const summary: Chat = async () => ({ content: "- earlier work, summarised", toolCalls: [] });
+  const long = (n: number): Message[] =>
+    Array.from({ length: n }, (_, i) => [
+      { role: "user" as const, content: `question ${i} ` + "q".repeat(2000) },
+      { role: "assistant" as const, content: `answer ${i} ` + "a".repeat(2000) },
+    ]).flat();
+
+  test("a conversation that outgrows the limit is summarised, and the turn carries on", async () => {
+    const { chat, received } = scripted([text("Done")]);
+    const notices: string[] = [];
+    const messages: Message[] = [{ role: "system", content: "You are Benny." }, ...long(6), { role: "user", content: "next task" }];
+
+    const result = await run(messages, chat, { contextLimit: 3000, summarize: summary }, { ...quiet, onNotice: (t) => notices.push(t) });
+
+    expect(result).toMatchObject({ contextFull: false, requests: 1 });
+    expect(notices[0]).toMatch(/^Summarised \d+ earlier messages to make room \(about [\d,]+ → [\d,]+ tokens\)\.$/);
+    expect(received[0]![1]!.content).toContain("- earlier work, summarised");
+    expect(messages.at(-1)).toEqual({ role: "assistant", content: "Done" });
+  });
+
+  test("if summarising fails, the turn stops with contextFull and says why", async () => {
+    const { chat, received } = scripted([text("never")]);
+    const notices: string[] = [];
+    const failing: Chat = async () => {
+      throw new Error("503 unavailable");
+    };
+    const messages: Message[] = [{ role: "system", content: "You are Benny." }, ...long(6), { role: "user", content: "next task" }];
+
+    const result = await run(messages, chat, { contextLimit: 3000, summarize: failing }, { ...quiet, onNotice: (t) => notices.push(t) });
+
+    expect(result.contextFull).toBe(true);
+    expect(received).toHaveLength(0);
+    expect(notices).toEqual(["Could not summarise the earlier conversation: 503 unavailable"]);
+  });
+
+  test("if a request fails after compacting, the conversation is restored exactly as it was before the turn", async () => {
+    const failing: Chat = async () => {
+      throw new Error("401 invalid key");
+    };
+    const messages: Message[] = [{ role: "system", content: "You are Benny." }, ...long(6), { role: "user", content: "next task" }];
+    const before = [...messages];
+
+    await expect(run(messages, failing, { contextLimit: 3000, summarize: summary })).rejects.toThrow("401");
+    expect(messages).toEqual(before);
+  });
+});
