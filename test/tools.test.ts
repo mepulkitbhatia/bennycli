@@ -56,7 +56,7 @@ afterAll(() => rm(base, { recursive: true, force: true }));
 
 describe("read_file", () => {
   test("returns a small file with line numbers", async () => {
-    expect(await read({ path: "small.txt" })).toBe("1\talpha\n2\tbeta\n3\tgamma");
+    expect(await read({ path: "small.txt" })).toBe("1│alpha\n2│beta\n3│gamma");
   });
 
   test("a missing file gives a clear message", async () => {
@@ -67,13 +67,13 @@ describe("read_file", () => {
     const first = await read({ path: "big.txt" });
     const lines = first.split("\n");
     expect(lines).toHaveLength(151);
-    expect(lines[149]).toBe("150\tline 150");
+    expect(lines[149]).toBe("150│line 150");
     expect(lines[150]).toBe("[Showing lines 1-150 of 1000. To read more, call read_file with offset=151.]");
 
     const next = await read({ path: "big.txt", offset: 151, limit: 2 });
-    expect(next.split("\n").slice(0, 2)).toEqual(["151\tline 151", "152\tline 152"]);
+    expect(next.split("\n").slice(0, 2)).toEqual(["151│line 151", "152│line 152"]);
 
-    expect(await read({ path: "big.txt", offset: 999 })).toBe("999\tline 999\n1000\tline 1000");
+    expect(await read({ path: "big.txt", offset: 999 })).toBe("999│line 999\n1000│line 1000");
   });
 
   test("output stays under the size cap even when lines are long", async () => {
@@ -259,7 +259,7 @@ describe("runTool handles whatever the model sends", () => {
   });
 
   test("a made-up namespace in front of the tool name is forgiven", async () => {
-    expect(await runTool(tools, "repo_browser.read_file", '{"path":"small.txt"}', ctx())).toBe("1\talpha\n2\tbeta\n3\tgamma");
+    expect(await runTool(tools, "repo_browser.read_file", '{"path":"small.txt"}', ctx())).toBe("1│alpha\n2│beta\n3│gamma");
   });
 
   test("broken JSON is reported", async () => {
@@ -275,8 +275,8 @@ describe("runTool handles whatever the model sends", () => {
   });
 
   test("null for an optional argument and numbers sent as strings are accepted", async () => {
-    expect(await read({ path: "small.txt", offset: null, limit: null })).toBe("1\talpha\n2\tbeta\n3\tgamma");
-    expect(await read({ path: "small.txt", offset: "2", limit: "1" })).toBe("2\tbeta\n[Showing lines 2-2 of 3. To read more, call read_file with offset=3.]");
+    expect(await read({ path: "small.txt", offset: null, limit: null })).toBe("1│alpha\n2│beta\n3│gamma");
+    expect(await read({ path: "small.txt", offset: "2", limit: "1" })).toBe("2│beta\n[Showing lines 2-2 of 3. To read more, call read_file with offset=3.]");
   });
 });
 

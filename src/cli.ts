@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { styleText } from "node:util";
 import { runTurn } from "./agent.ts";
+import { INSTRUCTIONS_FILE, loadProjectInstructions, systemPrompt } from "./context.ts";
 import { createChat, type Message } from "./llm.ts";
 import { createPermissions } from "./permissions.ts";
 import { tools } from "./tools/index.ts";
@@ -35,7 +36,11 @@ async function main() {
     console.error(styleText("yellow", "ripgrep (rg) is not installed, so the search tool is off. Install it with: brew install ripgrep"));
     available = tools.filter((tool) => tool.name !== "search");
   }
-  const messages: Message[] = [];
+  const cwd = process.cwd();
+  const instructions = await loadProjectInstructions(cwd);
+  // The instructions come first in every request. Local date, as YYYY-MM-DD.
+  const date = new Date().toLocaleDateString("en-CA");
+  const messages: Message[] = [{ role: "system", content: systemPrompt({ cwd, platform: process.platform, date, instructions }) }];
   let replying: AbortController | undefined;
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " });
@@ -69,6 +74,7 @@ async function main() {
   };
 
   console.log(styleText("dim", `benny ${version} · ${model} · Ctrl+C stops a reply, Ctrl+D exits`));
+  if (instructions) console.log(styleText("dim", `Following ${INSTRUCTIONS_FILE} in this folder`));
   prompt();
   for await (const line of rl) {
     const text = line.trim();
@@ -76,7 +82,7 @@ async function main() {
       messages.push({ role: "user", content: text });
       replying = new AbortController();
       try {
-        const result = await runTurn(messages, chat, events, { tools: available, cwd: process.cwd(), permission, signal: replying.signal });
+        const result = await runTurn(messages, chat, events, { tools: available, cwd, permission, signal: replying.signal });
         if (midLine) console.log();
         midLine = false;
         if (result.aborted) console.log(styleText("dim", "(stopped)"));

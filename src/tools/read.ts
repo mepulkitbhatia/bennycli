@@ -9,7 +9,7 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const readFileTool = defineTool({
   name: "read_file",
   description:
-    "Read a text file from the project. Returns the lines with their line numbers. " +
+    "Read a text file from the project. Each line is returned as its line number, │, then the line exactly as in the file. " +
     "A large file is returned in parts: use offset and limit to read further.",
   schema: z.object({
     path: z.string().describe("File path, relative to the project folder"),
@@ -39,7 +39,8 @@ export const readFileTool = defineTool({
     for (let i = offset - 1; i < end; i++) {
       let line = lines[i]!;
       if (line.length > MAX_LINE_CHARS) line = `${line.slice(0, MAX_LINE_CHARS)}… [line cut]`;
-      const numbered = `${i + 1}\t${line}`;
+      // "│" rather than a tab: models copied the tab into edit_file's old_text as if it were indentation.
+      const numbered = `${i + 1}│${line}`;
       if (out.length > 0 && chars + numbered.length > OUTPUT_MAX_CHARS) break;
       out.push(numbered);
       chars += numbered.length + 1;
