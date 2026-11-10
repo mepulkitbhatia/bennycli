@@ -1,5 +1,5 @@
 {
-  "name": "bennycli",
+  "name": "@pulkitbhatia/bennycli",
   "version": "0.1.0",
   "description": "A coding agent for your terminal, with a hand-written agent loop. Runs on Groq's free tier.",
   "keywords": [
@@ -26,6 +26,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -40,7 +43,7 @@
   "dependencies": {
     "diff": "^9.0.0",
     "openai": "^7.28.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

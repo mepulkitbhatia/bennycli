@@ -11,7 +11,7 @@ The agent loop is written from scratch, with no agent framework or agent SDK. It
 You need Node.js 22 or later, [ripgrep](https://github.com/BurntSushi/ripgrep) (`brew install ripgrep`), and a free Groq API key from [console.groq.com/keys](https://console.groq.com/keys).
 
 ```sh
-npm install -g bennycli
+npm install -g @pulkitbhatia/bennycli
 export GROQ_API_KEY=your-key
 ```
 
