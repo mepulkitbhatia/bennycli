@@ -4,15 +4,18 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type OpenAI from "openai";
 import { z } from "zod";
 
-// What a tool gets besides its input: where the project is, and a way to ask
-// the user before changing anything. Read-only tools never call confirm.
+// What a tool gets besides its input: where the project is, a way to ask the
+// user before changing anything, and the signal that fires when the user presses
+// Ctrl+C. Read-only tools never call confirm.
 export type ToolContext = {
   cwd: string;
-  confirm: (preview: string) => Promise<boolean>;
+  // `scope` narrows what "always" remembers, e.g. one exact command. Default: the whole tool.
+  confirm: (preview: string, scope?: string) => Promise<boolean>;
+  signal?: AbortSignal;
 };
 
 // The user's answer to "may this tool do this?", decided by the CLI.
-export type Permission = (tool: string, preview: string) => Promise<boolean>;
+export type Permission = (tool: string, preview: string, scope?: string) => Promise<boolean>;
 
 // A tool is an ordinary function plus what the model needs to ask for it:
 // a name, a description, and a schema for its input.
@@ -49,7 +52,7 @@ export async function runTool(
   tools: Tool[],
   name: string,
   rawArgs: string,
-  ctx: { cwd: string; permission: Permission },
+  ctx: { cwd: string; permission: Permission; signal?: AbortSignal },
 ): Promise<string> {
   // gpt-oss sometimes prefixes the name with a namespace it invented ("repo_browser.list_dir").
   const tool = tools.find((t) => t.name === name || t.name === name.replace(/^\w+\./, ""));
@@ -70,7 +73,11 @@ export async function runTool(
   }
 
   try {
-    return await tool.run(parsed.data, { cwd: ctx.cwd, confirm: (preview) => ctx.permission(tool.name, preview) });
+    return await tool.run(parsed.data, {
+      cwd: ctx.cwd,
+      signal: ctx.signal,
+      confirm: (preview, scope) => ctx.permission(tool.name, preview, scope),
+    });
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
   }

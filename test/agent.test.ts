@@ -1,7 +1,7 @@
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { runTurn, type TurnEvents } from "../src/agent.ts";
-import type { Chat, Message, Reply } from "../src/llm.ts";
+import { MalformedToolCallError, type Chat, type Message, type Reply } from "../src/llm.ts";
 import { defineTool } from "../src/tools/tool.ts";
 
 const echo = defineTool({
@@ -30,7 +30,7 @@ function scripted(replies: Reply[]) {
   return { chat, received };
 }
 
-const quiet: TurnEvents = { onText: () => {}, onToolCall: () => {} };
+const quiet: TurnEvents = { onText: () => {}, onToolCall: () => {}, onNotice: () => {} };
 const run = (messages: Message[], chat: Chat, extra: Partial<Parameters<typeof runTurn>[3]> = {}, events = quiet) =>
   runTurn(messages, chat, events, { tools: [echo], cwd: process.cwd(), permission: async () => true, ...extra });
 
@@ -50,7 +50,7 @@ test("a tool request is run, its result goes back to the model, and the answer f
   const messages: Message[] = [{ role: "user", content: "use echo" }];
   const calls: string[] = [];
 
-  const result = await run(messages, chat, {}, { onText: () => {}, onToolCall: (name, args) => calls.push(`${name} ${args}`) });
+  const result = await run(messages, chat, {}, { ...quiet, onToolCall: (name, args) => calls.push(`${name} ${args}`) });
 
   expect(result.requests).toBe(2);
   expect(result.tokens).toBe(30);
@@ -141,7 +141,7 @@ test("stopping during tool requests still gives every request a result", async (
   const { chat } = scripted([toolCall("echo", { text: "x" }), text("never asked")]);
   const messages: Message[] = [{ role: "user", content: "go" }];
 
-  const result = await run(messages, chat, { signal: stop.signal }, { onText: () => {}, onToolCall: () => stop.abort() });
+  const result = await run(messages, chat, { signal: stop.signal }, { ...quiet, onToolCall: () => stop.abort() });
 
   expect(result).toMatchObject({ aborted: true, requests: 1 });
   expect(messages.at(-1)).toEqual({ role: "tool", tool_call_id: "call_1", content: "Cancelled: the user stopped this turn before the tool ran." });
@@ -168,4 +168,53 @@ test("a request that fails mid-turn rolls the conversation back to before the tu
   await expect(run(messages, chat)).rejects.toThrow("400");
   expect(messages).toHaveLength(3); // no dangling tool request left behind
   expect(messages.at(-1)).toEqual({ role: "user", content: "go" });
+});
+
+describe("a tool request Groq could not parse", () => {
+  const malformed = () => new MalformedToolCallError("Parsing failed", '<|channel|>commentary to=read_file {"path": ');
+
+  test("is asked again with a note saying what went wrong; the note is not kept", async () => {
+    const received: Message[][] = [];
+    const notices: string[] = [];
+    const chat: Chat = async (messages) => {
+      received.push(structuredClone(messages));
+      if (received.length === 1) throw malformed();
+      return text("Fine now");
+    };
+    const messages: Message[] = [{ role: "user", content: "go" }];
+
+    const result = await run(messages, chat, {}, { ...quiet, onNotice: (t) => notices.push(t) });
+
+    expect(result.requests).toBe(2);
+    const note = received[1]!.at(-1)!;
+    expect(note.role).toBe("user");
+    expect(note.content).toContain("Parsing failed");
+    expect(note.content).toContain('to=read_file {"path": ');
+    expect(messages).toEqual([{ role: "user", content: "go" }, { role: "assistant", content: "Fine now" }]);
+    expect(notices).toEqual(["The model sent a tool request that could not be read. Asking again (1 of 2)."]);
+  });
+
+  test("gives up after two retries and leaves the conversation as it was", async () => {
+    let requests = 0;
+    const chat: Chat = async () => {
+      requests++;
+      throw malformed();
+    };
+    const messages: Message[] = [{ role: "user", content: "go" }];
+
+    await expect(run(messages, chat)).rejects.toThrow("Parsing failed");
+    expect(requests).toBe(3);
+    expect(messages).toEqual([{ role: "user", content: "go" }]);
+  });
+
+  test("other errors are not retried", async () => {
+    let requests = 0;
+    const chat: Chat = async () => {
+      requests++;
+      throw new Error("401 invalid API key");
+    };
+
+    await expect(run([{ role: "user", content: "go" }], chat)).rejects.toThrow("401");
+    expect(requests).toBe(1);
+  });
 });

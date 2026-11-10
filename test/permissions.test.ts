@@ -38,6 +38,17 @@ test("always stops asking for that tool only", async () => {
   expect(questions).toHaveLength(2);
 });
 
+test("with a scope, always covers that scope only", async () => {
+  const { permission, questions } = user("a", "n");
+  expect(await permission("run_command", "$ npm test", "npm test")).toBe(true);
+  expect(await permission("run_command", "$ npm test", "npm test")).toBe(true); // not asked again
+  expect(await permission("run_command", "$ rm -rf build", "rm -rf build")).toBe(false); // a different command still asks
+  expect(questions).toEqual([
+    "Allow run_command? (y)es / (n)o / (a)lways for this exact command  ",
+    "Allow run_command? (y)es / (n)o / (a)lways for this exact command  ",
+  ]);
+});
+
 test("a question that is cancelled (Ctrl+C) counts as no", async () => {
   const permission = createPermissions(async () => {
     throw new Error("AbortError");

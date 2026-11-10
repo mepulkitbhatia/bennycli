@@ -1,10 +1,13 @@
-import type { Chat, Message, Reply } from "./llm.ts";
+import { MalformedToolCallError, type Chat, type Message, type Reply } from "./llm.ts";
 import { runTool, toOpenAITools, type Permission, type Tool } from "./tools/tool.ts";
 
 export type TurnEvents = {
   onText: (text: string) => void;
   onToolCall: (name: string, args: string) => void;
+  onNotice: (text: string) => void;
 };
+
+const MALFORMED_RETRIES = 2;
 
 export type TurnOptions = {
   tools: Tool[];
@@ -41,6 +44,7 @@ async function loop(messages: Message[], chat: Chat, events: TurnEvents, opts: T
   const { tools, cwd, permission, signal, maxSteps = 25 } = opts;
   const toolDefs = toOpenAITools(tools);
   const result: TurnResult = { requests: 0, tokens: 0, aborted: false, hitStepLimit: false };
+  let lastMalformed: MalformedToolCallError | undefined;
 
   // ponytail: a plain step cap. Add detection of the same call repeating if the evals show loops.
   for (let step = 0; step < maxSteps; step++) {
@@ -49,12 +53,24 @@ async function loop(messages: Message[], chat: Chat, events: TurnEvents, opts: T
       shown += text;
       events.onText(text);
     };
-    // A stopped request may throw or may just end early (the OpenAI SDK ends its
-    // stream quietly), so the signal decides what happened, not the error.
-    const reply = await chat(messages, { signal, onText, tools: toolDefs }).catch((err) => {
-      if (!signal?.aborted) throw err;
-    });
-    result.requests++;
+    let reply: Reply | undefined;
+    for (let attempt = 0; ; attempt++) {
+      result.requests++;
+      shown = "";
+      try {
+        // On a retry, tell the model what went wrong. The note is sent once and not kept.
+        const request = attempt === 0 ? messages : [...messages, retryNote(lastMalformed!)];
+        reply = await chat(request, { signal, onText, tools: toolDefs });
+        break;
+      } catch (err) {
+        // A stopped request may throw or may just end early (the OpenAI SDK ends its
+        // stream quietly), so the signal decides what happened, not the error.
+        if (signal?.aborted) break;
+        if (!(err instanceof MalformedToolCallError) || attempt >= MALFORMED_RETRIES) throw err;
+        lastMalformed = err;
+        events.onNotice(`The model sent a tool request that could not be read. Asking again (${attempt + 1} of ${MALFORMED_RETRIES}).`);
+      }
+    }
     if (signal?.aborted || !reply) {
       // Stopped by the user: keep the text they already saw, so the next request matches the
       // screen. Half-received tool requests are dropped; they were never run.
@@ -72,7 +88,7 @@ async function loop(messages: Message[], chat: Chat, events: TurnEvents, opts: T
       events.onToolCall(call.name, call.arguments);
       const content = signal?.aborted
         ? "Cancelled: the user stopped this turn before the tool ran."
-        : await runTool(tools, call.name, call.arguments, { cwd, permission });
+        : await runTool(tools, call.name, call.arguments, { cwd, permission, signal });
       messages.push({ role: "tool", tool_call_id: call.id, content });
     }
     if (signal?.aborted) {
@@ -83,6 +99,16 @@ async function loop(messages: Message[], chat: Chat, events: TurnEvents, opts: T
 
   result.hitStepLimit = true;
   return result;
+}
+
+function retryNote(err: MalformedToolCallError): Message {
+  const sent = err.generation ? ` What you sent began: ${err.generation.slice(0, 300)}` : "";
+  return {
+    role: "user",
+    content:
+      `Your last reply could not be used: ${err.message}.${sent}\n` +
+      "Reply again: either answer in plain text, or call one of the provided tools by its exact name with its arguments as one valid JSON object.",
+  };
 }
 
 function assistantMessage(reply: Reply): Message {

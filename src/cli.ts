@@ -57,6 +57,10 @@ async function main() {
       process.stdout.write(text);
       midLine = !text.endsWith("\n");
     },
+    onNotice: (text: string) => {
+      console.log(`${midLine ? "\n" : ""}${styleText("yellow", text)}`);
+      midLine = false;
+    },
     onToolCall: (name: string, args: string) => {
       const shown = args.length > 100 ? `${args.slice(0, 100)}…` : args;
       console.log(`${midLine ? "\n" : ""}${styleText("cyan", "●")} ${name} ${styleText("dim", shown)}`);

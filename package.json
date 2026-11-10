@@ -1,9 +1,20 @@
 {
   "name": "bennycli",
-  "version": "0.0.1",
-  "description": "Benny: a terminal coding agent with a hand-written agent loop",
+  "version": "0.1.0",
+  "description": "A coding agent for your terminal, with a hand-written agent loop. Runs on Groq's free tier.",
+  "keywords": [
+    "ai",
+    "agent",
+    "coding-agent",
+    "cli",
+    "llm",
+    "groq",
+    "terminal"
+  ],
   "license": "MIT",
   "author": "Pulkit Bhatia",
+  "homepage": "https://github.com/mepulkitbhatia/bennycli#readme",
+  "bugs": "https://github.com/mepulkitbhatia/bennycli/issues",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mepulkitbhatia/bennycli.git"
@@ -16,14 +27,15 @@
     "dist"
   ],
   "engines": {
-    "node": ">=22.18"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc",
     "test": "vitest run",
     "dev": "node --env-file=.env src/cli.ts",
-    "spike": "node --env-file=.env scripts/spike.ts"
+    "spike": "node --env-file=.env scripts/spike.ts",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "diff": "^9.0.0",

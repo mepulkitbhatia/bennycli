@@ -41,23 +41,43 @@ export async function collect(stream: AsyncIterable<Chunk>, onText: (text: strin
   return { content, toolCalls: calls.filter(Boolean), usage };
 }
 
+// Groq rejects a reply whose tool request it cannot parse (error code
+// "tool_use_failed"). The model usually gets it right when asked again, so the
+// agent loop retries this error and no other.
+export class MalformedToolCallError extends Error {
+  readonly generation: string; // what the model actually wrote, when Groq includes it
+  constructor(message: string, generation: string) {
+    super(message);
+    this.generation = generation;
+  }
+}
+
 export function createChat(config: { apiKey: string; baseURL: string; model: string }): Chat {
   // The SDK retries rate-limit (429) and server errors itself, waiting as long as the server asks.
   const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseURL, maxRetries: 5 });
   return async (messages, { onText, tools, signal }) => {
-    const stream = await client.chat.completions.create(
-      {
-        model: config.model,
-        messages,
-        stream: true,
-        stream_options: { include_usage: true },
-        ...(tools?.length && { tools }),
-        // ponytail: model-name check. gpt-oss thinks before answering and those tokens count
-        // against the rate limit; move this to config when a second reasoning model needs it.
-        ...(config.model.includes("gpt-oss") && { reasoning_effort: "low" as const }),
-      },
-      { signal },
-    );
-    return collect(stream, onText);
+    try {
+      const stream = await client.chat.completions.create(
+        {
+          model: config.model,
+          messages,
+          stream: true,
+          stream_options: { include_usage: true },
+          ...(tools?.length && { tools }),
+          // ponytail: model-name check. gpt-oss thinks before answering and those tokens count
+          // against the rate limit; move this to config when a second reasoning model needs it.
+          ...(config.model.includes("gpt-oss") && { reasoning_effort: "low" as const }),
+        },
+        { signal },
+      );
+      return await collect(stream, onText);
+    } catch (err) {
+      // Mid-stream the error has no HTTP status, so the error code is what identifies it.
+      if (err instanceof OpenAI.APIError && err.code === "tool_use_failed") {
+        const generation = (err.error as { failed_generation?: unknown } | undefined)?.failed_generation;
+        throw new MalformedToolCallError(err.message, typeof generation === "string" ? generation : "");
+      }
+      throw err;
+    }
   };
 }

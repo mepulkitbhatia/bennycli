@@ -254,7 +254,7 @@ describe("write_file", () => {
 describe("runTool handles whatever the model sends", () => {
   test("an unknown tool name lists the tools that exist", async () => {
     expect(await runTool(tools, "open_file", "{}", ctx())).toBe(
-      'Error: there is no tool named "open_file". Available tools: read_file, list_dir, search, edit_file, write_file.',
+      'Error: there is no tool named "open_file". Available tools: read_file, list_dir, search, edit_file, write_file, run_command.',
     );
   });
 
