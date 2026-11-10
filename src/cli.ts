@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { styleText } from "node:util";
 import { runTurn } from "./agent.ts";
-import { INSTRUCTIONS_FILE, loadProjectInstructions, systemPrompt } from "./context.ts";
+import { INSTRUCTIONS_FILE, loadProjectInstructions, systemPrompt, tokenCounter } from "./context.ts";
 import { createChat, type Message } from "./llm.ts";
 import { createPermissions } from "./permissions.ts";
 import { tools } from "./tools/index.ts";
@@ -24,6 +24,10 @@ async function main() {
   const apiKey = process.env.BENNY_API_KEY ?? process.env.GROQ_API_KEY;
   const baseURL = process.env.BENNY_BASE_URL ?? "https://api.groq.com/openai/v1";
   const model = process.env.BENNY_MODEL ?? "openai/gpt-oss-120b";
+  // Groq's free tier rejects any request over 8,000 tokens a minute, which by Groq's own
+  // count of a prompt is about 7,570. 7,000 leaves room for the estimate being a little low.
+  const contextLimit = Number(process.env.BENNY_CONTEXT_LIMIT) || 7000;
+  const counter = tokenCounter();
   if (!apiKey) {
     console.error("No API key found. Get a free key at https://console.groq.com/keys, then run:\n  export GROQ_API_KEY=your-key");
     process.exitCode = 1;
@@ -82,12 +86,16 @@ async function main() {
       messages.push({ role: "user", content: text });
       replying = new AbortController();
       try {
-        const result = await runTurn(messages, chat, events, { tools: available, cwd, permission, signal: replying.signal });
+        const result = await runTurn(messages, chat, events, { tools: available, cwd, permission, signal: replying.signal, contextLimit, counter });
         if (midLine) console.log();
         midLine = false;
         if (result.aborted) console.log(styleText("dim", "(stopped)"));
         if (result.hitStepLimit) console.log(styleText("yellow", "Stopped after 25 tool steps. Say \"continue\" to carry on."));
-        console.log(styleText("dim", `${result.tokens} tokens · ${result.requests} request${result.requests === 1 ? "" : "s"}`));
+        if (result.contextFull) {
+          console.log(styleText("yellow", `The conversation is now too long to send (about ${result.contextTokens.toLocaleString("en")} tokens; the limit is ${contextLimit.toLocaleString("en")}). Start a new session: press Ctrl+D, then run benny again.`));
+        }
+        const plural = result.requests === 1 ? "" : "s";
+        console.log(styleText("dim", `${result.tokens.toLocaleString("en")} tokens · ${result.requests} request${plural} · context ${kilo(result.contextTokens)} of ${kilo(contextLimit)}`));
       } catch (err) {
         messages.pop(); // the request failed, so forget the message and let the user try again
         console.error(`\nError: ${err instanceof Error ? err.message : String(err)}`);
@@ -97,6 +105,10 @@ async function main() {
     prompt();
   }
   console.log();
+}
+
+function kilo(tokens: number): string {
+  return tokens < 1000 ? String(tokens) : `${(tokens / 1000).toFixed(1).replace(/\.0$/, "")}K`;
 }
 
 await main();

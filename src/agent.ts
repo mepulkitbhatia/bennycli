@@ -1,3 +1,4 @@
+import { tokenCounter, type TokenCounter } from "./context.ts";
 import { MalformedToolCallError, type Chat, type Message, type Reply } from "./llm.ts";
 import { runTool, toOpenAITools, type Permission, type Tool } from "./tools/tool.ts";
 
@@ -15,6 +16,10 @@ export type TurnOptions = {
   permission: Permission;
   signal?: AbortSignal;
   maxSteps?: number;
+  // A request bigger than this (in tokens) is not sent. Keep one counter for the
+  // whole session so it can reuse Groq's counts from earlier turns.
+  contextLimit?: number;
+  counter?: TokenCounter;
 };
 
 export type TurnResult = {
@@ -22,6 +27,8 @@ export type TurnResult = {
   tokens: number;
   aborted: boolean;
   hitStepLimit: boolean;
+  contextFull: boolean; // stopped because the next request would be over contextLimit
+  contextTokens: number; // how big the conversation is now, as the next request would be
 };
 
 // The agent loop. Send everything said so far; if the model answers in text,
@@ -30,8 +37,11 @@ export type TurnResult = {
 // so `messages` is the memory, and every tool result it sees is in there.
 export async function runTurn(messages: Message[], chat: Chat, events: TurnEvents, opts: TurnOptions): Promise<TurnResult> {
   const lengthBefore = messages.length;
+  const counter = opts.counter ?? tokenCounter();
   try {
-    return await loop(messages, chat, events, opts);
+    const result = await loop(messages, chat, events, { ...opts, counter });
+    result.contextTokens = counter.estimate(messages, toOpenAITools(opts.tools));
+    return result;
   } catch (err) {
     // A request failed part-way through. Drop the half-finished turn, or the next
     // request would carry a tool request with no result and fail as well.
@@ -40,14 +50,26 @@ export async function runTurn(messages: Message[], chat: Chat, events: TurnEvent
   }
 }
 
-async function loop(messages: Message[], chat: Chat, events: TurnEvents, opts: TurnOptions): Promise<TurnResult> {
-  const { tools, cwd, permission, signal, maxSteps = 25 } = opts;
+async function loop(
+  messages: Message[],
+  chat: Chat,
+  events: TurnEvents,
+  opts: TurnOptions & { counter: TokenCounter },
+): Promise<TurnResult> {
+  const { tools, cwd, permission, signal, maxSteps = 25, contextLimit = Infinity, counter } = opts;
   const toolDefs = toOpenAITools(tools);
-  const result: TurnResult = { requests: 0, tokens: 0, aborted: false, hitStepLimit: false };
+  const result: TurnResult = { requests: 0, tokens: 0, aborted: false, hitStepLimit: false, contextFull: false, contextTokens: 0 };
   let lastMalformed: MalformedToolCallError | undefined;
 
   // ponytail: a plain step cap. Add detection of the same call repeating if the evals show loops.
   for (let step = 0; step < maxSteps; step++) {
+    // Groq rejects a request over the limit outright, and waiting does not help,
+    // so a request that will not fit is never sent. The conversation stays valid.
+    if (counter.estimate(messages, toolDefs) > contextLimit) {
+      result.contextFull = true;
+      return result;
+    }
+
     let shown = "";
     const onText = (text: string) => {
       shown += text;
@@ -61,6 +83,7 @@ async function loop(messages: Message[], chat: Chat, events: TurnEvents, opts: T
         // On a retry, tell the model what went wrong. The note is sent once and not kept.
         const request = attempt === 0 ? messages : [...messages, retryNote(lastMalformed!)];
         reply = await chat(request, { signal, onText, tools: toolDefs });
+        if (reply.usage) counter.record(request, reply.usage.prompt_tokens);
         break;
       } catch (err) {
         // A stopped request may throw or may just end early (the OpenAI SDK ends its

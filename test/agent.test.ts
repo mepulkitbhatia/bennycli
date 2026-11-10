@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { runTurn, type TurnEvents } from "../src/agent.ts";
+import { roughTokens, tokenCounter } from "../src/context.ts";
 import { MalformedToolCallError, type Chat, type Message, type Reply } from "../src/llm.ts";
 import { defineTool } from "../src/tools/tool.ts";
 
@@ -40,7 +41,7 @@ test("a text answer ends the turn after one request", async () => {
 
   const result = await run(messages, chat);
 
-  expect(result).toEqual({ requests: 1, tokens: 15, aborted: false, hitStepLimit: false });
+  expect(result).toMatchObject({ requests: 1, tokens: 15, aborted: false, hitStepLimit: false, contextFull: false });
   expect(messages).toEqual([{ role: "user", content: "hi" }, { role: "assistant", content: "Hello" }]);
   expect(received[0]).toHaveLength(1);
 });
@@ -216,5 +217,38 @@ describe("a tool request Groq could not parse", () => {
 
     await expect(run([{ role: "user", content: "go" }], chat)).rejects.toThrow("401");
     expect(requests).toBe(1);
+  });
+});
+
+describe("the context limit", () => {
+  test("a request that would be over the limit is not sent", async () => {
+    let requests = 0;
+    const chat: Chat = async () => (requests++, text("never"));
+    const messages: Message[] = [{ role: "user", content: "x".repeat(40_000) }]; // about 10,000 tokens
+
+    const result = await run(messages, chat, { contextLimit: 7000 });
+
+    expect(requests).toBe(0);
+    expect(result).toMatchObject({ contextFull: true, requests: 0 });
+    expect(result.contextTokens).toBeGreaterThan(7000);
+  });
+
+  test("when tool results push it over mid-turn, the turn stops with every request answered", async () => {
+    const { chat } = scripted([toolCall("echo", { text: "y".repeat(8000) }), text("never asked")]);
+    const messages: Message[] = [{ role: "user", content: "go" }];
+
+    const result = await run(messages, chat, { contextLimit: 3000 });
+
+    expect(result).toMatchObject({ contextFull: true, requests: 1 });
+    expect(messages.at(-1)?.role).toBe("tool");
+  });
+
+  test("the size reported after a turn uses Groq's count of the last request", async () => {
+    const { chat } = scripted([text("Hello")]); // the script reports prompt_tokens: 10
+    const messages: Message[] = [{ role: "user", content: "hi" }];
+
+    const result = await run(messages, chat, { counter: tokenCounter() });
+
+    expect(result.contextTokens).toBe(10 + roughTokens([{ role: "assistant", content: "Hello" }]));
   });
 });

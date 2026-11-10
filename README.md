@@ -59,6 +59,7 @@ Benny only reads and writes files inside the folder it was started in.
 | `GROQ_API_KEY` or `BENNY_API_KEY` | (required) |
 | `BENNY_MODEL` | `openai/gpt-oss-120b` |
 | `BENNY_BASE_URL` | `https://api.groq.com/openai/v1` |
+| `BENNY_CONTEXT_LIMIT` | `7000` tokens, which fits Groq's free tier. Raise it for a paid tier or another provider. |
 
 To use another OpenAI-compatible provider, set `BENNY_BASE_URL`, `BENNY_MODEL` and `BENNY_API_KEY`.
 

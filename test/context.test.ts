@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, test } from "vitest";
-import { loadProjectInstructions, systemPrompt } from "../src/context.ts";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { loadProjectInstructions, roughTokens, systemPrompt, tokenCounter } from "../src/context.ts";
 
 let cwd: string;
 beforeEach(async () => {
@@ -46,4 +46,35 @@ test("a long BENNY.md is cut, with a note", async () => {
   const text = await loadProjectInstructions(cwd);
   expect(text).toHaveLength(4000 + "\n[BENNY.md was cut at 4000 characters.]".length);
   expect(text?.endsWith("\n[BENNY.md was cut at 4000 characters.]")).toBe(true);
+});
+
+describe("counting tokens", () => {
+  const tools = [{ type: "function", function: { name: "read_file" } }];
+  const system = { role: "system", content: "You are Benny." };
+  const user = { role: "user", content: "Fix the bug." };
+
+  test("a rough count is about one token per 4 characters of JSON", () => {
+    expect(roughTokens("x".repeat(398))).toBe(100); // 400 characters with the quotes
+  });
+
+  test("before Groq has counted anything, everything is estimated", () => {
+    expect(tokenCounter().estimate([system, user], tools)).toBe(roughTokens([system, user]) + roughTokens(tools));
+  });
+
+  test("after a reply, Groq's count is reused and only new messages are estimated", () => {
+    const counter = tokenCounter();
+    const messages: object[] = [system, user];
+    counter.record(messages, 900);
+    const reply = { role: "assistant", content: "Done." };
+    messages.push(reply);
+    expect(counter.estimate(messages, tools)).toBe(900 + roughTokens([reply]));
+  });
+
+  test("if an earlier message is replaced, Groq's count no longer applies", () => {
+    const counter = tokenCounter();
+    const messages: object[] = [system, user];
+    counter.record(messages, 900);
+    messages[1] = { role: "user", content: "Summary of the earlier conversation." };
+    expect(counter.estimate(messages, tools)).toBe(roughTokens(messages) + roughTokens(tools));
+  });
 });

@@ -50,3 +50,32 @@ Environment:
 Project instructions from ${INSTRUCTIONS_FILE}, written by the user. Follow them:
 ${env.instructions}`;
 }
+
+// A rough token count: about 4 characters per token for English and code. Only
+// used for messages Groq has not counted yet; see tokenCounter.
+export function roughTokens(value: unknown): number {
+  return Math.ceil(JSON.stringify(value).length / 4);
+}
+
+export type TokenCounter = ReturnType<typeof tokenCounter>;
+
+// Knows how big the next request will be before it is sent. After each reply,
+// Groq reports the exact size of the request it answered. The conversation only
+// grows at the end, so the next request is that known size plus a rough count of
+// the messages added since. If an earlier message was replaced (for example by
+// compaction), the known size no longer applies and everything is estimated.
+export function tokenCounter() {
+  let known: { count: number; last: unknown; tokens: number } | undefined;
+  return {
+    estimate(messages: readonly unknown[], tools: unknown): number {
+      if (known && messages.length >= known.count && messages[known.count - 1] === known.last) {
+        return known.tokens + roughTokens(messages.slice(known.count));
+      }
+      return roughTokens(messages) + roughTokens(tools);
+    },
+    // `sent` is exactly what the request contained; `promptTokens` is Groq's count of it.
+    record(sent: readonly unknown[], promptTokens: number) {
+      known = { count: sent.length, last: sent.at(-1), tokens: promptTokens };
+    },
+  };
+}
